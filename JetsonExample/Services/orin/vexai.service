@@ -1,0 +1,12 @@
+[Unit]
+Description=Start the VEXAI root program
+After=network.target
+
+[Service]
+Environment="PATH=/opt/vexai/bin:/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="LD_LIBRARY_PATH=/usr/local/cuda/lib64"
+ExecStart=/bin/bash /home/vex/VAIC_26_27/JetsonExample/Scripts/run.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

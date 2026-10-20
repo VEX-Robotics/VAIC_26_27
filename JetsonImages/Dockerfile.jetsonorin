@@ -1,0 +1,161 @@
+# Jetson Orin Nano — VEX AI rootfs builder
+#
+# Produces a root filesystem tarball ready to flash onto the Orin Nano.
+#
+# Build and export:
+#   docker build --platform linux/arm64 -t vexai-rootfs -f Dockerfile.jetsononrin .
+#   docker create --name vexai-rootfs vexai-rootfs
+#   docker export vexai-rootfs | gzip > vexai-rootfs.tar.gz
+#   docker rm vexai-rootfs
+
+FROM nvcr.io/nvidia/tensorrt:26.05-py3
+LABEL maintainer="VEX Robotics"
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Fail fast if the image is not building for arm64/aarch64.
+RUN test "$(dpkg --print-architecture)" = "arm64"
+
+# ── System update ─────────────────────────────────────────────────────────────
+RUN apt-get update && apt-get -y upgrade && apt-get clean
+
+# ── Base tools + Python 3 ─────────────────────────────────────────────────────
+RUN apt-get install -y --no-install-recommends \
+        python3 python3-venv python3-dev \
+        curl ca-certificates git sudo lsb-release \
+    && apt-get clean
+
+RUN apt-get install -y --no-install-recommends \
+    libusb-1.0-0 libxcb1 libgl1-mesa-dev 
+
+# ── User account ──────────────────────────────────────────────────────────────
+RUN useradd -m -s /bin/bash vex \
+    && echo 'vex:password' | chpasswd \
+    && usermod -aG sudo,dialout,video,audio vex \
+    && echo 'vex ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/vex
+
+# ── NVIDIA CUDA apt repository (Ubuntu 24.04 / ARM64 sbsa) ───────────────────
+# RUN curl -fsSL \
+#         https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb \
+#         -o /tmp/cuda-keyring.deb \
+#     && dpkg -i /tmp/cuda-keyring.deb \
+#     && rm /tmp/cuda-keyring.deb \
+#     && apt-get update \
+#     && apt-get install -y cuda-toolkit-12-6 \
+#     && apt-get clean
+
+# ── Intel RealSense apt repository ───────────────────────────────────────────
+# librealsense2-dkms is included so DKMS compiles the kernel module
+# automatically on first boot against the live Orin kernel.
+# 'jammy' is pinned — Intel has not published a noble (24.04) release.
+RUN mkdir -p /etc/apt/keyrings \
+    && curl -sSf https://librealsense.realsenseai.com/Debian/librealsenseai.asc | \
+        gpg --dearmor | tee /etc/apt/keyrings/librealsenseai.gpg > /dev/null \
+    && echo "deb [signed-by=/etc/apt/keyrings/librealsenseai.gpg] https://librealsense.realsenseai.com/Debian/apt-repo `lsb_release -cs` main" | \
+        tee /etc/apt/sources.list.d/librealsense.list \
+    && apt-get update \
+    && apt-get install -y librealsense2 librealsense2-dev librealsense2-utils \
+    && apt-get clean
+
+# ── Python virtual environment ────────────────────────────────────────────────
+ENV VENV="/opt/vexai"
+ENV PATH="$VENV/bin:/usr/local/cuda/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+
+RUN python3 -m venv --system-site-packages $VENV \
+    && pip install --upgrade pip
+
+# ── Dashboard dependency manifests for Docker layer caching ──────────────────
+WORKDIR /home/vex
+RUN mkdir -p /home/vex/VAIC_26_27/JetsonWebDashboard/vexai-web-dashboard-react
+COPY JetsonWebDashboard/vexai-web-dashboard-react/package.json /home/vex/VAIC_26_27/JetsonWebDashboard/vexai-web-dashboard-react/
+COPY JetsonWebDashboard/vexai-web-dashboard-react/package-lock.json /home/vex/VAIC_26_27/JetsonWebDashboard/vexai-web-dashboard-react/
+
+# ── Python packages ───────────────────────────────────────────────────────────
+# pyrealsense2 builds from source on aarch64 using the librealsense2-dev headers.
+# ── Node.js 16 + web dashboard ────────────────────────────────────────────────
+RUN apt-get install -y nodejs npm && apt-get clean \
+    && npm cache clean -f \
+    && npm install -g n \
+    && n 16 \
+    && npm install -g serve
+
+# needed by L4T apply_binaries.sh
+RUN apt-get update && apt-get install -y \
+    bridge-utils \
+    nvme-cli \
+    libpcre3 \
+    device-tree-compiler \
+    efibootmgr \
+    cpio \
+    xxd \
+    i2c-tools \
+    gir1.2-appindicator3-0.1 \
+    libevdev2 libseat1 libinput10 libunwind8 libc6-arm64-cross\
+    libasound2t64 libgstreamer1.0-0 libgstreamer-plugins-bad1.0-0 libgstreamer-plugins-base1.0-0 \
+    python3-tk python3-matplotlib \
+    kmod
+
+# ── Networking stack (needed in exported rootfs) ─────────────────────────────
+RUN apt-get install -y --no-install-recommends \
+        network-manager wpasupplicant wireless-regdb \
+        iproute2 iputils-ping net-tools rfkill dnsmasq-base \
+    && apt-get clean
+
+
+# ── SSH server ────────────────────────────────────────────────────────────────
+RUN apt-get install -y --no-install-recommends openssh-server \
+    && apt-get clean \
+    && mkdir -p /var/run/sshd \
+    && ln -sf /lib/systemd/system/ssh.service \
+        /etc/systemd/system/multi-user.target.wants/ssh.service
+
+# ── Python packages ───────────────────────────────────────────────────────────
+# pyrealsense2 builds from source on aarch64 using the librealsense2-dev headers.
+RUN pip install pyserial websocket-server opencv-python pyrealsense2 \ 
+    && pip install --upgrade Pillow
+
+# ── Clone VAIC repository ─────────────────────────────────────────────────────
+WORKDIR /home/vex
+COPY --chown=vex:vex . /home/vex/VAIC_26_27
+# RUN git clone https://github.com/VEX-Robotics/VAIC_26_27.git \
+#     && chown -R vex:vex VAIC_26_27
+
+WORKDIR /home/vex/VAIC_26_27/JetsonWebDashboard/vexai-web-dashboard-react
+RUN [ -d build ] || (npm install && npm run build)
+
+# ── Hostname ─────────────────────────────────────────────────────────────────
+RUN echo 'vexai' > /etc/hostname
+
+RUN apt-get install -y --no-install-recommends locales \
+    && apt-get clean \
+    && sed -i 's/^[^#]/#&/' /etc/locale.gen \
+    && sed -i -E '/en_(US|GB)/s/^#//' /etc/locale.gen \
+    && locale-gen
+ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
+
+# ── Wi-Fi hotspot ─────────────────────────────────────────────────────────────
+RUN mkdir -p /etc/NetworkManager/system-connections \
+    && mkdir -p /etc/systemd/system/multi-user.target.wants \
+    && ln -sf /lib/systemd/system/NetworkManager.service \
+        /etc/systemd/system/multi-user.target.wants/NetworkManager.service \
+    && ln -sf /lib/systemd/system/NetworkManager.service \
+        /etc/systemd/system/dbus-org.freedesktop.NetworkManager.service \
+    && printf '[ifupdown]\nmanaged=true\n' > /etc/NetworkManager/conf.d/10-vex-managed.conf \
+    && printf '[connection]\nid=Hotspot\ntype=wifi\nautoconnect=true\n\n[wifi]\nmode=ap\nssid=VexAI\n\n[wifi-security]\nkey-mgmt=wpa-psk\npsk=vexrobotics\n\n[ipv4]\nmethod=shared\n\n[ipv6]\nmethod=ignore\n' \
+        > /etc/NetworkManager/system-connections/VexAI-Hotspot.nmconnection \
+    && chmod 600 /etc/NetworkManager/system-connections/VexAI-Hotspot.nmconnection
+
+RUN apt-get install -y --no-install-recommends cloud-guest-utils && apt-get clean
+# ── vexai systemd service ─────────────────────────────────────────────────────
+COPY JetsonExample/Scripts/firstboot-resize.sh /usr/local/sbin/firstboot-resize.sh
+COPY JetsonExample/Services/orin/vexai.service /etc/systemd/system/vexai.service
+COPY JetsonExample/Services/firstboot-resize.service /etc/systemd/system/firstboot-resize.service
+RUN chmod +x /home/vex/VAIC_26_27/JetsonExample/Scripts/run.sh \
+    && chmod +x /home/vex/VAIC_26_27/JetsonExample/Scripts/service.sh \
+    && mkdir -p /etc/systemd/system/multi-user.target.wants \
+    && ln -sf /etc/systemd/system/firstboot-resize.service \
+        /etc/systemd/system/multi-user.target.wants/firstboot-resize.service \
+    && ln -sf /etc/systemd/system/vexai.service \
+        /etc/systemd/system/multi-user.target.wants/vexai.service
+

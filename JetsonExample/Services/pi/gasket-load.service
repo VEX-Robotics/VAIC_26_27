@@ -1,0 +1,11 @@
+[Unit]
+Description=Load Gasket and Apex kernel modules
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c "modprobe gasket && modprobe apex"
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

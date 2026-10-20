@@ -1,0 +1,14 @@
+[Unit]
+Description=Expand root partition to fill disk
+ConditionPathExists=!/var/lib/firstboot-resize.done
+After=local-fs.target
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/firstboot-resize.sh
+ExecStartPost=/bin/touch /var/lib/firstboot-resize.done
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

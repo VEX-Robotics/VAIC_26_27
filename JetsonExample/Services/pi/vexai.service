@@ -1,0 +1,13 @@
+[Unit]
+Description=Start the VEXAI root program
+After=network.target gasket-load.service
+
+[Service]
+User=vex
+Environment="PYENV_ROOT=/home/vex/.pyenv"
+Environment="PATH=/home/vex/.pyenv/shims:/home/vex/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart=/bin/bash /home/vex/VAIC_26_27/JetsonExample/Scripts/run.sh
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
