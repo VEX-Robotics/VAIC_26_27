@@ -1,5 +1,9 @@
 # The VEX AI Competition (VAIC) System
 
+## [Hardware](./HARDWARE.md)
+
+HARDWARE.md lists the non-VEX hardware needed to run VEX AI: the recommended Jetson Orin Nano Super, the lower-cost Raspberry Pi 5 with a Google Coral, the legacy Jetson Nano, the Intel RealSense camera, and how to power each platform.
+
 ## [JetsonExample](./JetsonExample/README.md)
 
 JetsonExample contains the default code that powers the VEX AI system, from processing image data and running the AI model to detect objects for the VEX V5 Brain.
